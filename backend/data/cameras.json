@@ -1,6 +1,16 @@
 {
   "cameras": [
     {
+      "id": "748902bb",
+      "name": "MPFM 1080 2 ",
+      "ip": "10.10.30.58",
+      "user": "mpfm10802",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "c500"
+    },
+    {
       "id": "336c45bf",
       "name": "MPFM 1080 1",
       "ip": "10.10.30.57",
@@ -11,14 +21,44 @@
       "model": "c500"
     },
     {
-      "id": "748902bb",
-      "name": "MPFM 1080 2 ",
-      "ip": "10.10.30.58",
-      "user": "mpfm10802",
+      "id": "7c58b39d",
+      "name": "c200 trailer1",
+      "ip": "10.10.10.51",
+      "user": "c200n1",
       "password": "agar1212",
       "cloud_password": "",
       "enabled": true,
       "model": "c500"
+    },
+    {
+      "id": "3a46c1eb",
+      "name": "C5002",
+      "ip": "10.10.10.52",
+      "user": "c500n2",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "c500"
+    },
+    {
+      "id": "99d87fb2",
+      "name": "500n4",
+      "ip": "10.10.10.55",
+      "user": "c500n4",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "c500"
+    },
+    {
+      "id": "9932ee41",
+      "name": "c200 trailer2",
+      "ip": "10.10.10.53",
+      "user": "c200n2",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "c200"
     },
     {
       "id": "222f0785",
@@ -51,50 +91,10 @@
       "model": "c500"
     },
     {
-      "id": "7c58b39d",
-      "name": "Galpon",
-      "ip": "10.10.10.51",
-      "user": "c200n1",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "c500"
-    },
-    {
-      "id": "3a46c1eb",
-      "name": "C5002",
-      "ip": "10.10.10.52",
-      "user": "c500n2",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "c500"
-    },
-    {
-      "id": "9932ee41",
-      "name": "c200 trailer",
-      "ip": "10.10.10.53",
-      "user": "c200n2",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "c200"
-    },
-    {
       "id": "d627172a",
       "name": "C500N3",
       "ip": "10.10.10.54",
       "user": "c500n3",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "c500"
-    },
-    {
-      "id": "99d87fb2",
-      "name": "500n4",
-      "ip": "10.10.10.55",
-      "user": "c500n4",
       "password": "agar1212",
       "cloud_password": "",
       "enabled": true,

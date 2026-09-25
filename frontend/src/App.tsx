@@ -72,7 +72,15 @@ export default function App() {
             <div className={page === 'dashboard' ? 'h-full' : 'h-full hidden'}>
               <Dashboard />
             </div>
-            {page === 'config' && role === 'baseadv' && <Config />}
+            {(page === 'config' || page === 'config:cameras') && role === 'baseadv' && (
+              <Config section="cameras" />
+            )}
+            {page === 'config:trailer' && role === 'baseadv' && (
+              <Config section="trailer" />
+            )}
+            {page === 'config:users' && role === 'baseadv' && (
+              <Config section="users" />
+            )}
             {page === 'dvr' && <Dvr />}
             {page === 'recordings' && <Recordings />}
           </div>

@@ -1,5 +1,6 @@
 import subprocess
 import shutil
+import struct
 import time
 import re
 import threading
@@ -25,6 +26,7 @@ class RecordingService:
         self._last_backup: dict[str, Path] = {}
         self._cleanup_stop: threading.Event | None = None
         self._cleanup_thread: threading.Thread | None = None
+        self._remux_lock = threading.Lock()
 
     def kill_orphans(self) -> int:
         """Kill all ffmpeg processes that are writing DVR segments.
@@ -216,15 +218,15 @@ class RecordingService:
                     groups[base].append(f)
                 for base, files in groups.items():
                     target = date_dir / base
-                    if target.exists():
-                        continue
                     best = max(files, key=lambda x: x.stat().st_size)
+                    best_sz = best.stat().st_size
                     try:
-                        best.rename(target)
-                        restored += 1
-                        logger.info("Restored backup %s -> %s", best, target.relative_to(RECORDINGS_DIR))
+                        if not target.exists() or target.stat().st_size < best_sz:
+                            shutil.move(str(best), str(target))
+                            restored += 1
+                            logger.info("Restored backup %s -> %s", best, target.relative_to(RECORDINGS_DIR))
                         for other in files:
-                            if other != best and other.exists():
+                            if other.exists():
                                 other.unlink(missing_ok=True)
                     except OSError as e:
                         logger.warning("Failed to restore backup %s: %s", best, e)
@@ -233,10 +235,11 @@ class RecordingService:
                     continue
                 base = f.name.split(".backup_")[0]
                 target = cam_dir / base
-                if target.exists():
+                if target.exists() and target.stat().st_size >= f.stat().st_size:
+                    f.unlink(missing_ok=True)
                     continue
                 try:
-                    f.rename(target)
+                    shutil.move(str(f), str(target))
                     restored += 1
                     logger.info("Restored backup %s -> %s", f, target.relative_to(RECORDINGS_DIR))
                 except OSError as e:
@@ -296,7 +299,8 @@ class RecordingService:
             "-map", "0:a?",
             "-max_muxing_queue_size", "1024",
             "-c:v", "copy",
-            "-c:a", "copy",
+            "-c:a", "aac",
+            "-avoid_negative_ts", "make_zero",
             "-f", "segment",
             "-segment_time", "3600",
             "-segment_format", "mp4",
@@ -307,8 +311,10 @@ class RecordingService:
             "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
             "-metadata", f"creation_time={creation}",
             seg_path,
+            "-map", "0:v",
+            "-map", "0:a?",
             "-c:v", "copy",
-            "-c:a", "copy",
+            "-c:a", "aac",
             "-f", "hls",
             "-hls_time", "2",
             "-hls_list_size", "3600",
@@ -348,7 +354,7 @@ class RecordingService:
                 if not line:
                     continue
                 low = line.lower()
-                if any(k in low for k in ("error", "denied", "401", "403", "refused", "timed out", "unauthorized", "not permitted")):
+                if any(k in low for k in ("error", "denied", "401", "403", "refused", "timed out", "unauthorized", "not permitted", "could not", "failed", "invalid")):
                     logger.warning("Camera %s DVR: %s", camera_id, line)
                 if "error opening input" in low or "no route to host" in low or "connection refused" in low:
                     self._restore_backup(camera_id)
@@ -364,22 +370,31 @@ class RecordingService:
         current_name = now.strftime("%Y%m%d_%H.mp4")
         date_folder = self._date_folder(now)
         current_file = out_dir / date_folder / current_name
-        best: tuple[int, Path | None] = (0, None)
+        backups: list[tuple[int, Path]] = []
         for f in out_dir.glob(f"{date_folder}/{current_name}.backup_*"):
             try:
                 sz = f.stat().st_size
-                if sz > best[0]:
-                    best = (sz, f)
+                backups.append((sz, f))
             except OSError:
                 pass
-        if best[1] is None:
+        if not backups:
             return
+        best_sz, best_path = max(backups, key=lambda x: x[0])
         try:
-            if current_file.exists() and current_file.stat().st_size >= best[0]:
+            if current_file.exists() and current_file.stat().st_size >= best_sz:
+                for sz, bf in backups:
+                    if sz <= current_file.stat().st_size:
+                        bf.unlink(missing_ok=True)
                 return
-            shutil.copy2(str(best[1]), str(current_file))
-            self._last_backup[camera_id] = best[1]
-            logger.warning("Camera %s: restored backup (%dMB) after connection failure", camera_id, best[0] // (1024 * 1024))
+            if not current_file.exists() or current_file.stat().st_size < self.MIN_PLAYABLE_SIZE:
+                shutil.move(str(best_path), str(current_file))
+                for sz, bf in backups:
+                    if bf != best_path and sz <= best_sz and bf.exists():
+                        bf.unlink(missing_ok=True)
+            else:
+                shutil.copy2(str(best_path), str(current_file))
+            self._last_backup[camera_id] = best_path
+            logger.warning("Camera %s: restored backup (%dMB) after connection failure", camera_id, best_sz // (1024 * 1024))
         except OSError:
             pass
 
@@ -491,11 +506,16 @@ class RecordingService:
             if not cam_dir.is_dir():
                 continue
             cam_id = cam_dir.name.removeprefix("cam_")
-            for f in self._iter_segment_files(cam_id, skip_in_progress=True):
+            for f in self._iter_segment_files(cam_id, skip_in_progress=False):
                 m = SEGMENT_PATTERN.match(f.name) or BACKUP_PATTERN.match(f.name)
                 if not m:
                     continue
-                stat = f.stat()
+                try:
+                    stat = f.stat()
+                except OSError:
+                    continue
+                if stat.st_size < self.MIN_PLAYABLE_SIZE:
+                    continue
                 date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
                 hour = int(m.group(4))
                 recordings.append({
@@ -531,11 +551,19 @@ class RecordingService:
             m = SEGMENT_PATTERN.match(f.name) or BACKUP_PATTERN.match(f.name)
             if not m:
                 continue
+            try:
+                sz = f.stat().st_size
+            except OSError:
+                continue
+            if sz < self.MIN_PLAYABLE_SIZE:
+                continue
             date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
             entry = by_date.setdefault(date_str, {"date": date_str, "count": 0, "total_size": 0, "hours": []})
-            entry["count"] += 1
-            entry["total_size"] += f.stat().st_size
-            entry["hours"].append(int(m.group(4)))
+            hour = int(m.group(4))
+            if hour not in entry["hours"]:
+                entry["count"] += 1
+                entry["hours"].append(hour)
+            entry["total_size"] += sz
         result = sorted(by_date.values(), key=lambda x: x["date"], reverse=True)
         for e in result:
             e["hours"].sort()
@@ -563,7 +591,52 @@ class RecordingService:
         except Exception:
             return ""
 
+    def _inspect_mp4_boxes(self, filepath: Path, max_boxes: int = 8) -> list[str]:
+        boxes: list[str] = []
+        try:
+            data_len = filepath.stat().st_size
+            with open(filepath, "rb") as f:
+                pos = 0
+                while pos + 8 <= data_len and len(boxes) < max_boxes:
+                    f.seek(pos)
+                    hdr = f.read(16)
+                    if len(hdr) < 8:
+                        break
+                    sz, btype = struct.unpack(">I4s", hdr[:8])
+                    btype_str = btype.decode("latin1", "replace")
+                    if sz == 1:
+                        if len(hdr) < 16:
+                            break
+                        sz = struct.unpack(">Q", hdr[8:16])[0]
+                    elif sz == 0:
+                        sz = data_len - pos
+                    boxes.append(btype_str)
+                    if sz < 8:
+                        break
+                    pos += sz
+        except OSError:
+            pass
+        return boxes
+
+    def _is_faststart_mp4(self, filepath: Path) -> bool:
+        boxes = self._inspect_mp4_boxes(filepath, max_boxes=6)
+        return (
+            "moov" in boxes
+            and "moof" not in boxes
+            and "mdat" in boxes
+            and boxes.index("moov") < boxes.index("mdat")
+        )
+
+    def _is_fragmented_mp4(self, filepath: Path) -> bool:
+        boxes = self._inspect_mp4_boxes(filepath, max_boxes=6)
+        return "moov" in boxes and "moof" in boxes
+
     def _has_valid_moov(self, filepath: Path) -> bool | None:
+        boxes = self._inspect_mp4_boxes(filepath, max_boxes=6)
+        if "moov" in boxes:
+            return True
+        if boxes:
+            return False
         output = self._ffprobe(filepath, "stream=codec_type")
         if len(output) > 0:
             return True
@@ -573,6 +646,66 @@ class RecordingService:
 
     def _get_video_codec(self, filepath: Path) -> str:
         return self._ffprobe(filepath, "stream=codec_name", extra_args=["-select_streams", "v:0"])
+
+    def _finalize_faststart(self, filepath: Path) -> bool:
+        if self._is_faststart_mp4(filepath):
+            return True
+        with self._remux_lock:
+            if self._is_faststart_mp4(filepath):
+                return True
+            ffmpeg = self._resolve_ffmpeg()
+            tmp_out = filepath.with_suffix(".faststart.tmp.mp4")
+            tmp_out.unlink(missing_ok=True)
+            try:
+                orig_stat = filepath.stat()
+                cmd = [
+                    ffmpeg, "-y",
+                    "-i", str(filepath),
+                    "-c", "copy",
+                    "-movflags", "+faststart",
+                    str(tmp_out),
+                ]
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=180,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                )
+                if res.returncode == 0 and tmp_out.exists() and tmp_out.stat().st_size >= self.MIN_PLAYABLE_SIZE:
+                    os.utime(tmp_out, (orig_stat.st_atime, orig_stat.st_mtime))
+                    os.replace(tmp_out, filepath)
+                    logger.info("Finalized faststart MP4: %s", filepath.relative_to(RECORDINGS_DIR))
+                    return True
+                tmp_out.unlink(missing_ok=True)
+                return False
+            except Exception as e:
+                logger.warning("Failed to finalize faststart MP4 %s: %s", filepath.name, e)
+                tmp_out.unlink(missing_ok=True)
+                return False
+
+    def finalize_completed_segments(self) -> int:
+        count = 0
+        now_ts = time.time()
+        for cam_dir in sorted(RECORDINGS_DIR.glob("cam_*")):
+            if not cam_dir.is_dir():
+                continue
+            cam_id = cam_dir.name.removeprefix("cam_")
+            skip_name = self._in_progress_filename(cam_id)
+            for f in sorted(cam_dir.glob("*/*.mp4")):
+                if not SEGMENT_PATTERN.match(f.name):
+                    continue
+                if skip_name and f.name == skip_name:
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                if st.st_size < self.MIN_PLAYABLE_SIZE or (now_ts - st.st_mtime) < 15:
+                    continue
+                if self._is_fragmented_mp4(f):
+                    if self._finalize_faststart(f):
+                        count += 1
+        return count
 
     def is_segment_playable(self, camera_id: str, filename: str) -> tuple[bool, str]:
         """Check whether a DVR segment file is safe to play.
@@ -602,7 +735,12 @@ class RecordingService:
         if codec and codec not in ("h264", "mpeg4", "vp8", "vp9", "av1"):
             return False, f"codec '{codec}' no soportado por el navegador"
         if is_in_progress:
-            return True, "in progress"
+            live_pl = self._camera_dir(camera_id) / "_live" / "playlist.m3u8"
+            if live_pl.exists():
+                return True, "in progress"
+            return False, "segment in progress (moov not ready)"
+        if not self._is_faststart_mp4(p):
+            return False, "moov fragmentado (needs remux)"
         return True, "ok"
 
     def get_hours(self, camera_id: str, date_str: str) -> list[dict]:
@@ -631,7 +769,7 @@ class RecordingService:
                 existing = next((h for h in hours if h["hour"] == hour and ".backup_" not in h.get("filename", "")), None)
                 if existing:
                     continue
-            is_in_progress = False
+            is_in_progress = bool(skip_name and f.name == skip_name)
             stat = f.stat()
             playable_base = stat.st_size >= self.MIN_PLAYABLE_SIZE and self._has_valid_moov(f) is not False
             codec_ok = True
@@ -699,12 +837,17 @@ class RecordingService:
         stop = self._cleanup_stop
         if stop is None:
             return
-        while not stop.wait(3600):
+        ticks = 0
+        while not stop.wait(120):
+            ticks += 1
             try:
-                settings = load_settings()
-                retention = int(settings.get("recording_retention_days", 7))
-                if retention > 0:
-                    self.cleanup_old(retention)
+                self._cleanup_prepare_dir()
+                self.finalize_completed_segments()
+                if ticks % 30 == 0:
+                    settings = load_settings()
+                    retention = int(settings.get("recording_retention_days", 7))
+                    if retention > 0:
+                        self.cleanup_old(retention)
                 for cid in list(self._processes.keys()):
                     if self.is_recording(cid):
                         self._ensure_date_dirs(cid)
@@ -744,8 +887,43 @@ class RecordingService:
             return None, "stat failed"
         if size < self.MIN_PLAYABLE_SIZE:
             return None, "file too small"
-        if self._has_valid_moov(p) is not False:
+        if self._is_faststart_mp4(p):
             return p, "already_ready"
+
+        parts = filename.replace("\\", "/").split("/", 1)
+        camera_id = parts[0][4:] if len(parts) == 2 and parts[0].startswith("cam_") else ""
+        skip_name = self._in_progress_filename(camera_id) if camera_id else None
+        is_in_progress = bool(skip_name and p.name == skip_name)
+
+        if not is_in_progress:
+            if self._finalize_faststart(p):
+                return p, "remuxed_in_place"
+            return None, "moov not ready"
+
+        self._cleanup_prepare_dir()
+        safe_name = filename.replace("/", "_").replace("\\", "_")
+        out_path = self._prepare_dir() / safe_name
+        ffmpeg = self._resolve_ffmpeg()
+        try:
+            cmd = [
+                ffmpeg, "-y",
+                "-i", str(p),
+                "-c", "copy",
+                "-movflags", "+faststart",
+                str(out_path),
+            ]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=180,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+            if res.returncode == 0 and out_path.exists() and out_path.stat().st_size >= self.MIN_PLAYABLE_SIZE:
+                return out_path, "prepared"
+            out_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning("prepare_segment failed for %s: %s", filename, e)
+            out_path.unlink(missing_ok=True)
         return None, "moov not ready"
 
     def get_recording_path(self, filename: str) -> Path | None:

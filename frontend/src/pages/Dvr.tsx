@@ -212,6 +212,49 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
   useEffect(() => {
     let cancelled = false;
     let hls: HlsType | null = null;
+    const el = videoRef.current;
+    if (!el) return;
+    const v: HTMLVideoElement = el;
+
+    let streamUrl = url;
+
+    const onLoaded = () => {
+      if (!cancelled) {
+        setLoading(false);
+        setPreparing(false);
+        v.play().catch(() => {});
+      }
+    };
+
+    const onErr = () => {
+      if (cancelled) return;
+      if (retriesRef.current < MAX_RETRIES) {
+        retriesRef.current++;
+        setTimeout(() => {
+          if (!cancelled && v) {
+            setLoading(true);
+            setError(false);
+            v.load();
+          }
+        }, 2000);
+      } else {
+        setError(true);
+        setLoading(false);
+        setPreparing(false);
+        const code = v.error?.code;
+        if (code === 3) setErrorMsg('Error de decodificacion — archivo corrupto o incompleto');
+        else if (code === 4) setErrorMsg('Formato no soportado por el navegador');
+        else setErrorMsg('No se pudo cargar el segmento');
+      }
+    };
+
+    const attachDirectStream = (targetUrl: string) => {
+      v.addEventListener('loadedmetadata', onLoaded);
+      v.addEventListener('loadeddata', onLoaded);
+      v.addEventListener('canplay', onLoaded);
+      v.src = targetUrl;
+      v.load();
+    };
 
     async function loadVideo() {
       setLoading(true);
@@ -219,30 +262,6 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
       setErrorMsg('');
       setPreparing(false);
       retriesRef.current = 0;
-      const v = videoRef.current;
-      if (!v) return;
-
-      const onLoaded = () => { if (!cancelled) setLoading(false); };
-      const onErr = () => {
-        if (cancelled) return;
-        if (retriesRef.current < MAX_RETRIES) {
-          retriesRef.current++;
-          setTimeout(() => {
-            if (!cancelled && v) {
-              setLoading(true);
-              setError(false);
-              v.load();
-            }
-          }, 2000);
-        } else {
-          setError(true);
-          setLoading(false);
-          const code = v.error?.code;
-          if (code === 3) setErrorMsg('Error de decodificacion — archivo corrupto o incompleto');
-          else if (code === 4) setErrorMsg('Formato no soportado por el navegador');
-          else setErrorMsg('No se pudo cargar el segmento');
-        }
-      };
 
       v.addEventListener('error', onErr);
 
@@ -264,6 +283,7 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
                 return;
               }
               streamUrl = api.recordingStreamUrl(prep.prepared_filename);
+              setPreparing(false);
             } catch {
               if (cancelled) return;
               setError(true);
@@ -301,39 +321,47 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
               if (cancelled) return;
               (hls as any).startLoad(0);
               setLoading(false);
-              v.play();
+              v.play().catch(() => {});
             });
-            hls.on((Hls as any).Events.ERROR, (_ev: any, data: any) => {
+            hls.on((Hls as any).Events.ERROR, async (_ev: any, data: any) => {
               if (data.fatal) {
                 hls?.destroy();
                 hls = null;
-                v.src = streamUrl;
+                try {
+                  setPreparing(true);
+                  const prep = await api.prepareRecording(filename);
+                  if (cancelled) return;
+                  if (prep.ready) {
+                    streamUrl = api.recordingStreamUrl(prep.prepared_filename);
+                  }
+                } catch {}
+                if (!cancelled) {
+                  setPreparing(false);
+                  attachDirectStream(streamUrl);
+                }
               }
             });
           } catch {
             if (cancelled) return;
-            v.addEventListener('loadeddata', onLoaded);
-            v.addEventListener('canplay', onLoaded);
-            v.src = streamUrl;
+            attachDirectStream(streamUrl);
           }
         } else {
-          v.addEventListener('loadeddata', onLoaded);
-          v.addEventListener('canplay', onLoaded);
-          v.src = streamUrl;
+          attachDirectStream(streamUrl);
         }
       } catch {
         if (cancelled) return;
-        v.addEventListener('loadeddata', onLoaded);
-        v.addEventListener('canplay', onLoaded);
-        v.src = streamUrl;
+        attachDirectStream(streamUrl);
       }
     }
 
-    let streamUrl = url;
     loadVideo();
 
     return () => {
       cancelled = true;
+      v.removeEventListener('error', onErr);
+      v.removeEventListener('loadedmetadata', onLoaded);
+      v.removeEventListener('loadeddata', onLoaded);
+      v.removeEventListener('canplay', onLoaded);
       if (hls) hls.destroy();
     };
   }, [filename, url]);
@@ -366,7 +394,7 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
 
       <div className="relative bg-void aspect-video">
         {loading && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+          <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center gap-2 bg-void/60">
             <Loader2 size={28} className="text-accent animate-spin" />
             {preparing && (
               <span className="text-xs font-mono text-text-muted uppercase tracking-[0.14em]">Preparando segmento...</span>
@@ -374,16 +402,18 @@ function VideoPlayer({ filename, title, url, downloadUrl, onClose, onNext, onPre
           </div>
         )}
         {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-text-muted text-base text-center px-4">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-void/90 text-text-muted text-base text-center px-4 whitespace-pre-line">
             {errorMsg}
           </div>
         )}
-<video
-  ref={videoRef}
-  controls
-  preload="metadata"
-  className="w-full h-full object-contain"
-/>
+        <video
+          ref={videoRef}
+          controls
+          autoPlay
+          playsInline
+          preload="auto"
+          className="w-full h-full object-contain"
+        />
       </div>
     </div>
   );
@@ -421,6 +451,10 @@ export function Dvr() {
     try {
       const c = await api.getDvrCalendar(selectedCamera);
       setCalendar(c);
+      if (c.length > 0 && (!selectedDateRef.current || !c.some((d) => d.date === selectedDateRef.current))) {
+        selectedDateRef.current = c[0].date;
+        setSelectedDate(c[0].date);
+      }
     } catch {
       setCalendar([]);
     }
@@ -447,10 +481,11 @@ export function Dvr() {
 
   useEffect(() => {
     if (!selectedCamera) return;
-    loadCalendar();
+    selectedDateRef.current = null;
     setSelectedDate(null);
     setHours([]);
     setSelectedHour(null);
+    loadCalendar();
   }, [selectedCamera, loadCalendar]);
 
   useEffect(() => {

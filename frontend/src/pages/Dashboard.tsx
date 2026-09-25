@@ -14,6 +14,7 @@ import {
   useSortable,
   rectSortingStrategy,
   verticalListSortingStrategy,
+  horizontalListSortingStrategy,
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -65,7 +66,10 @@ function SortableCameraTile({
   index?: number;
   camNumber?: number;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: cam.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: cam.id,
+    disabled: isMain,
+  });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -108,13 +112,15 @@ function SortableCameraTile({
 
   return (
     <div ref={setNodeRef} style={style} className="animate-tile-in relative group h-full">
-      <div
-        {...attributes}
-        {...listeners}
-        className="absolute top-2 left-2 z-20 p-1.5 rounded-sm bg-void/85 backdrop-blur-sm opacity-100 lg:opacity-0 lg:group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity"
-      >
-        <GripVertical size={14} className="text-text-muted" />
-      </div>
+      {!isMain && (
+        <div
+          {...attributes}
+          {...listeners}
+          className="absolute top-2 left-2 z-20 p-1.5 rounded-sm bg-void/85 backdrop-blur-sm opacity-100 lg:opacity-0 lg:group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity"
+        >
+          <GripVertical size={14} className="text-text-muted" />
+        </div>
+      )}
       <CameraTile
         cameraId={cam.id}
         name={cam.name}
@@ -433,7 +439,7 @@ export function Dashboard() {
                 </div>
                 <div className="flex shrink-0 overflow-x-auto" style={{ gap: LMAIN_GAP, height: M_THUMB_HEIGHT }}>
                   {otherCams.length > 0 && (
-                    <SortableContext items={cameraIds} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={otherCams.map(c => c.id)} strategy={horizontalListSortingStrategy}>
                       {otherCams.map(cam => (
                         <SortableCameraTile
                           key={cam.id}
@@ -462,7 +468,7 @@ export function Dashboard() {
               <div className="flex flex-1 min-h-0" style={{ gap: LMAIN_GAP }}>
                 <div className="shrink-0 flex flex-col" style={{ width: LEFT_WIDTH, gap: LMAIN_GAP }}>
                   {leftCams.length > 0 && (
-                    <SortableContext items={cameraIds} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={leftCams.map(c => c.id)} strategy={verticalListSortingStrategy}>
                       {leftCams.map(cam => (
                         <SortableCameraTile
                           key={cam.id}
@@ -513,7 +519,7 @@ export function Dashboard() {
               </div>
               <div className="flex shrink-0 overflow-x-auto" style={{ gap: LMAIN_GAP, height: THUMB_HEIGHT }}>
                 {bottomCams.length > 0 && (
-                  <SortableContext items={cameraIds} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={bottomCams.map(c => c.id)} strategy={horizontalListSortingStrategy}>
                     {bottomCams.map(cam => (
                       <SortableCameraTile
                         key={cam.id}

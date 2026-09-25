@@ -68,6 +68,12 @@ def _autostart_recording():
                 logger.info("Autostart recording for camera %s (%s)", cid, cam.get("name", "?"))
             else:
                 logger.warning("Autostart failed for camera %s: %s", cid, result.get("error"))
+        recording_service._start_cleanup_loop()
+        threading.Thread(
+            target=recording_service.finalize_completed_segments,
+            daemon=True,
+            name="dvr-startup-finalize",
+        ).start()
         logger.info("Autostart recording: %d/%d cameras", started, len(cams))
     except Exception as e:
         logger.error("Autostart recording error: %s", e)
