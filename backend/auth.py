@@ -190,6 +190,102 @@ async def get_current_user_ws(websocket: WebSocket) -> dict | None:
     }
 
 
+def _public_user(u: dict) -> dict:
+    return {
+        "username": u["username"],
+        "role": u.get("role", "traileradv"),
+        "allowed_camera_ids": u.get("allowed_camera_ids", []),
+    }
+
+
+def list_users_public() -> list[dict]:
+    return [_public_user(u) for u in load_users()]
+
+
+def _hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def create_user(
+    username: str,
+    password: str,
+    role: str = "traileradv",
+    allowed_camera_ids: list[str] | None = None,
+) -> dict:
+    username = (username or "").strip()
+    if not username:
+        raise ValueError("El nombre de usuario es requerido")
+    if not password:
+        raise ValueError("La contrasena es requerida")
+    if role not in ("baseadv", "traileradv"):
+        raise ValueError(f"Rol invalido: {role}")
+    users = load_users()
+    if any(u.get("username") == username for u in users):
+        raise ValueError(f"El usuario {username} ya existe")
+    user = {
+        "username": username,
+        "password_hash": _hash(password),
+        "role": role,
+        "allowed_camera_ids": list(allowed_camera_ids or []),
+    }
+    users.append(user)
+    save_users(users)
+    return _public_user(user)
+
+
+def update_user(
+    username: str,
+    new_username: str | None = None,
+    password: str | None = None,
+    role: str | None = None,
+    allowed_camera_ids: list[str] | None = None,
+) -> dict:
+    users = load_users()
+    index = next(
+        (i for i, u in enumerate(users) if u.get("username") == username), None
+    )
+    if index is None:
+        raise KeyError(f"Usuario {username} no encontrado")
+    user = users[index]
+    if new_username is not None:
+        new_username = new_username.strip()
+        if not new_username:
+            raise ValueError("El nombre de usuario es requerido")
+        if new_username != username and any(
+            u.get("username") == new_username for u in users
+        ):
+            raise ValueError(f"El usuario {new_username} ya existe")
+        user["username"] = new_username
+    if password:
+        user["password_hash"] = _hash(password)
+    if role is not None:
+        if role not in ("baseadv", "traileradv"):
+            raise ValueError(f"Rol invalido: {role}")
+        user["role"] = role
+        if role != "traileradv":
+            user["allowed_camera_ids"] = []
+    if allowed_camera_ids is not None:
+        user["allowed_camera_ids"] = list(allowed_camera_ids)
+    save_users(users)
+    return _public_user(user)
+
+
+def delete_user(username: str, current_username: str | None = None) -> None:
+    if current_username is not None and username == current_username:
+        raise ValueError("No puedes eliminar tu propio usuario")
+    users = load_users()
+    index = next(
+        (i for i, u in enumerate(users) if u.get("username") == username), None
+    )
+    if index is None:
+        raise KeyError(f"Usuario {username} no encontrado")
+    admins = [u for u in users if u.get("role") == "baseadv"]
+    if len(admins) == 1 and admins[0].get("username") == username:
+        raise ValueError("No puedes eliminar el unico administrador")
+    users.pop(index)
+    save_users(users)
+
+
 def get_trailer_user(role: str) -> dict | None:
     if role == "traileradv":
         return None
