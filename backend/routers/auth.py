@@ -1,3 +1,4 @@
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.auth import (
@@ -49,6 +50,9 @@ def me(request: Request):
 
 @router.get("/trailer-cameras")
 def get_trailer_cameras(request: Request):
+    current = get_current_user_http(request)
+    if current["role"] != "baseadv":
+        raise HTTPException(status_code=403, detail="Solo el administrador puede ver esto")
     current = _require_admin(request)
     trailer = get_trailer_user(current["role"])
     if trailer is None:
@@ -58,6 +62,9 @@ def get_trailer_cameras(request: Request):
 
 @router.put("/trailer-cameras")
 def set_trailer_cameras(body: dict, request: Request):
+    current = get_current_user_http(request)
+    if current["role"] != "baseadv":
+        raise HTTPException(status_code=403, detail="Solo el administrador puede configurar esto")
     _require_admin(request)
     camera_ids = body.get("allowed_camera_ids", [])
     if not isinstance(camera_ids, list):
