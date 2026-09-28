@@ -15,11 +15,18 @@ type Direction = 'up' | 'down' | 'left' | 'right';
 
 const MIN_STEP_MS = 220;
 const QUICK_INTERVALS = [5, 10, 15, 30, 60];
+const PATROL_SPEEDS = [
+  { label: 'Muy lento', speed: 0.15 },
+  { label: 'Lento', speed: 0.25 },
+  { label: 'Medio', speed: 0.35 },
+  { label: 'Rápido', speed: 0.5 },
+];
 
 export function PTZPanel({ cameraId, cameraName, onClose }: Props) {
   const {
     connected, error, cruiseMode,
     patrolInterval, setPatrolInterval,
+    patrolSpeed, setPatrolSpeed,
     presets,
     move, stop, gotoPreset, setPreset, removePreset,
     cruiseH, stopCruise, patrol, stopPatrol,
@@ -123,7 +130,14 @@ export function PTZPanel({ cameraId, cameraName, onClose }: Props) {
     const valid = Math.max(3, Math.min(3600, Math.round(sec || 10)));
     setPatrolInterval(valid);
     if (cruiseMode === 'patrol' && presets.length > 0) {
-      patrol(presets.map(p => p.token), valid);
+      patrol(presets.map(p => p.token), valid, patrolSpeed);
+    }
+  };
+
+  const handleSpeedChange = (spd: number) => {
+    setPatrolSpeed(spd);
+    if (cruiseMode === 'patrol' && presets.length > 0) {
+      patrol(presets.map(p => p.token), patrolInterval, spd);
     }
   };
 
@@ -131,7 +145,7 @@ export function PTZPanel({ cameraId, cameraName, onClose }: Props) {
     if (cruiseMode === 'patrol') {
       stopPatrol();
     } else if (presets.length > 0) {
-      patrol(presets.map(p => p.token), patrolInterval);
+      patrol(presets.map(p => p.token), patrolInterval, patrolSpeed);
     }
   };
 
@@ -357,6 +371,29 @@ export function PTZPanel({ cameraId, cameraName, onClose }: Props) {
                   className="w-full bg-transparent text-[11px] font-mono text-text-primary text-right focus:outline-none"
                 />
                 <span className="text-[10px] font-mono text-text-muted ml-0.5">s</span>
+              </div>
+            </div>
+
+            {/* Velocidad de transicion entre puntos */}
+            <div className="flex flex-col gap-1.5 pt-1 border-t border-glass-border/40">
+              <span className="text-[10px] text-text-muted font-mono uppercase tracking-[0.14em]">
+                Velocidad de movimiento
+              </span>
+              <div className="grid grid-cols-4 gap-1">
+                {PATROL_SPEEDS.map((s) => (
+                  <button
+                    key={s.speed}
+                    type="button"
+                    onClick={() => handleSpeedChange(s.speed)}
+                    className={`py-1 rounded-sm border text-[10px] font-mono transition-colors ${
+                      Math.abs(patrolSpeed - s.speed) < 0.05
+                        ? 'bg-accent text-on-accent border-accent font-bold'
+                        : 'bg-void border-glass-border/60 text-text-secondary hover:border-accent hover:text-accent'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
               </div>
             </div>
 

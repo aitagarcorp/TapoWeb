@@ -77,7 +77,7 @@ export function TopBar({ page, theme, onToggleTheme, role, onLogout }: Props) {
       <div className="w-px h-[30px] bg-[#27384d] hidden md:block" />
 
       <div className="hidden xl:block font-mono text-[23px] font-bold tracking-[5px] text-[#f0f4fa] whitespace-nowrap uppercase">
-        SISTEMA DE VIGILANCIA AGARVEN
+        SISTEMA DE MONITOREO AGARVEN
       </div>
 
       <div className="hidden md:flex items-center gap-[18px]">

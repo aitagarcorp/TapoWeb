@@ -11,56 +11,45 @@ export function useMjpegWs(wsUrl: string | null) {
   const retryCountRef = useRef(0);
   const playingRef = useRef(false);
 
-  const pendingBlobRef = useRef<Blob | null>(null);
-  const renderingRef = useRef(false);
-  const rafIdRef = useRef<number | null>(null);
+  const nextBufferRef = useRef<ArrayBuffer | null>(null);
+  const decodingRef = useRef(false);
 
-  const stopRender = useCallback(() => {
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-    pendingBlobRef.current = null;
-    renderingRef.current = false;
-  }, []);
+  const processNext = useCallback(() => {
+    if (nextBufferRef.current && !decodingRef.current) {
+      const data = nextBufferRef.current;
+      nextBufferRef.current = null;
+      decodingRef.current = true;
 
-  const startRender = useCallback((canvas: HTMLCanvasElement) => {
-    if (rafIdRef.current !== null) return;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) return;
-
-    const render = () => {
-      const blob = pendingBlobRef.current;
-      if (blob && !renderingRef.current) {
-        pendingBlobRef.current = null;
-        renderingRef.current = true;
-        createImageBitmap(blob)
-          .then((bitmap) => {
+      createImageBitmap(new Blob([data], { type: 'image/jpeg' }))
+        .then((bitmap) => {
+          const canvas = canvasRef.current;
+          if (canvas) {
             if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
             if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-            ctx.drawImage(bitmap, 0, 0);
-            bitmap.close();
-            renderingRef.current = false;
-          })
-          .catch(() => {
-            renderingRef.current = false;
-          });
-      }
-      rafIdRef.current = requestAnimationFrame(render);
-    };
-
-    rafIdRef.current = requestAnimationFrame(render);
+            const ctx = canvas.getContext('2d', { alpha: false });
+            if (ctx) ctx.drawImage(bitmap, 0, 0);
+          }
+          bitmap.close();
+          decodingRef.current = false;
+          processNext();
+        })
+        .catch(() => {
+          decodingRef.current = false;
+          processNext();
+        });
+    }
   }, []);
 
   const cleanup = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-    stopRender();
+    nextBufferRef.current = null;
+    decodingRef.current = false;
     retryCountRef.current = 0;
     playingRef.current = false;
     setPlaying(false);
     setReconnecting(false);
-  }, [stopRender]);
+  }, []);
 
   useEffect(() => {
     if (!wsUrl) return;
@@ -85,11 +74,10 @@ export function useMjpegWs(wsUrl: string | null) {
           setPlaying(true);
           setReconnecting(false);
           playingRef.current = true;
-          const canvas = canvasRef.current;
-          if (canvas) startRender(canvas);
         }
 
-        pendingBlobRef.current = new Blob([e.data], { type: 'image/jpeg' });
+        nextBufferRef.current = e.data;
+        processNext();
       };
 
       ws.onerror = () => { setError(true); };
@@ -98,7 +86,8 @@ export function useMjpegWs(wsUrl: string | null) {
         setPlaying(false);
         setReconnecting(true);
         playingRef.current = false;
-        stopRender();
+        nextBufferRef.current = null;
+        decodingRef.current = false;
         if (urlRef.current === wsUrl) {
           const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000) + Math.random() * 1000;
           retryCountRef.current++;
@@ -109,7 +98,7 @@ export function useMjpegWs(wsUrl: string | null) {
 
     connect();
     return cleanup;
-  }, [wsUrl, cleanup, startRender, stopRender]);
+  }, [wsUrl, cleanup, processNext]);
 
   return { canvasRef, playing, reconnecting, error };
 }

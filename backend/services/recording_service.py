@@ -330,7 +330,7 @@ class RecordingService:
             hls_playlist,
             "-map", "0:v",
             "-an",
-            "-vf", "scale=640:-2,fps=10",
+            "-vf", "scale=640:-2",
             "-c:v", "mjpeg",
             "-q:v", "7",
             "-flush_packets", "1",
@@ -376,8 +376,9 @@ class RecordingService:
             stdout = proc.stdout
             if stdout is None:
                 return
+            read_fn = getattr(stdout, "read1", stdout.read)
             while True:
-                chunk = stdout.read(32768)
+                chunk = read_fn(32768)
                 if not chunk:
                     break
                 buf += chunk
@@ -386,7 +387,6 @@ class RecordingService:
                     if last_soi > 0:
                         buf = buf[last_soi:]
 
-                latest_jpg: bytes | None = None
                 while True:
                     soi = buf.find(b"\xff\xd8")
                     if soi == -1:
@@ -399,10 +399,7 @@ class RecordingService:
                     jpg = buf[soi:eoi + 2]
                     buf = buf[eoi + 2:]
                     if len(jpg) >= 256:
-                        latest_jpg = jpg
-
-                if latest_jpg is not None:
-                    mjpeg_manager.push_frame_threadsafe(camera_id, latest_jpg)
+                        mjpeg_manager.push_frame_threadsafe(camera_id, jpg)
         except Exception:
             pass
 

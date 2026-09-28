@@ -48,6 +48,7 @@ def ptz_status(camera_id: str, request: Request):
         "led": "on" if onvif._light_on else "off",
         "cruise_mode": onvif.cruise_mode,
         "patrol_interval": onvif.patrol_interval,
+        "patrol_speed": onvif.patrol_speed,
         "last_latency_ms": onvif.last_latency_ms,
     }
 
@@ -89,7 +90,7 @@ def ptz_command(camera_id: str, cmd: PTZCommand, request: Request):
             onvif.stop_cruise()
         case "patrol":
             tokens = cmd.preset_token.split(",") if cmd.preset_token else []
-            onvif.start_patrol(tokens, cmd.interval)
+            onvif.start_patrol(tokens, cmd.interval, speed=cmd.speed)
         case "stop_patrol":
             onvif.stop_patrol()
         case "patrol_sweep":
@@ -104,6 +105,7 @@ def ptz_command(camera_id: str, cmd: PTZCommand, request: Request):
         "success": True,
         "cruise_mode": onvif.cruise_mode,
         "patrol_interval": onvif.patrol_interval,
+        "patrol_speed": onvif.patrol_speed,
         "led": "on" if onvif._light_on else "off",
         "last_latency_ms": onvif.last_latency_ms,
     }

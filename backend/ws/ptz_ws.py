@@ -72,6 +72,7 @@ async def ptz_websocket(websocket: WebSocket, camera_id: str):
         "led": "on" if onvif._light_on else "off",
         "cruise_mode": onvif.cruise_mode,
         "patrol_interval": onvif.patrol_interval,
+        "patrol_speed": onvif.patrol_speed,
     })
 
     try:
@@ -140,11 +141,13 @@ async def ptz_websocket(websocket: WebSocket, camera_id: str):
                 case "patrol":
                     tokens = data.get("tokens", [])
                     interval = int(data.get("interval", 10))
-                    await _run(onvif.start_patrol, tokens, interval)
+                    speed = float(data.get("speed", 0.25))
+                    await _run(onvif.start_patrol, tokens, interval, speed)
                     await websocket.send_json({
                         "ok": True,
                         "cruise_mode": onvif.cruise_mode,
                         "patrol_interval": onvif.patrol_interval,
+                        "patrol_speed": onvif.patrol_speed,
                     })
 
                 case "stop_patrol":

@@ -1,5 +1,6 @@
 import threading
 import time
+import math
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -55,6 +56,7 @@ class OnvifService:
         self._light_on = False
         self.cruise_mode: str | None = None  # 'h' | 'v' | 'patrol' | 'sweep' | None
         self.patrol_interval: int = 10
+        self.patrol_speed: float = 0.25
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="onvif-ptz")
         self._transport = None
 
@@ -347,7 +349,67 @@ class OnvifService:
             self.cruise_mode = None
         self.stop()
 
-    def start_patrol(self, preset_tokens: list[str], interval: int = 10):
+    def _smooth_goto_preset(self, token: str, speed: float = 0.25, stop_event: threading.Event | None = None) -> bool:
+        """Move gently toward a preset using ContinuousMove to avoid jerky snaps,
+        then lock in exact position with GotoPreset."""
+        if not self._connected or not self._ptz or not self._profile_token:
+            return False
+        p_map = {}
+        with self._lock:
+            try:
+                raw = self._ptz.GetPresets({"ProfileToken": self._profile_token})
+                for p in raw:
+                    pos = getattr(p, "PTZPosition", None)
+                    if pos and hasattr(pos, "PanTilt") and pos.PanTilt is not None:
+                        p_map[str(p.token)] = (float(pos.PanTilt.x), float(pos.PanTilt.y))
+            except Exception:
+                pass
+
+        target = p_map.get(str(token))
+        if not target:
+            return self._goto_preset_raw(token)
+
+        tgt_x, tgt_y = target
+        try:
+            with self._lock:
+                st = self._ptz.GetStatus({"ProfileToken": self._profile_token})
+                cur_x = float(st.Position.PanTilt.x)
+                cur_y = float(st.Position.PanTilt.y)
+        except Exception:
+            return self._goto_preset_raw(token)
+
+        dx = tgt_x - cur_x
+        dy = tgt_y - cur_y
+        dist = math.hypot(dx, dy)
+        if dist > 0.03:
+            s_val = max(0.1, min(0.6, float(speed or 0.25)))
+            vx = (dx / dist) * s_val
+            vy = (dy / dist) * s_val
+            self.move_immediate(vx, vy)
+            t0 = time.time()
+            timeout = min(30.0, (dist / (s_val * 0.05)) + 4.0)
+            while time.time() - t0 < timeout:
+                if stop_event and stop_event.is_set():
+                    self.stop_immediate()
+                    return False
+                try:
+                    with self._lock:
+                        curr = self._ptz.GetStatus({"ProfileToken": self._profile_token})
+                        cx = float(curr.Position.PanTilt.x)
+                        cy = float(curr.Position.PanTilt.y)
+                    rem = math.hypot(tgt_x - cx, tgt_y - cy)
+                    dot = (tgt_x - cx) * vx + (tgt_y - cy) * vy
+                    if rem < 0.025 or dot <= 0:
+                        break
+                except Exception:
+                    break
+                time.sleep(0.08)
+            self.stop_immediate()
+            time.sleep(0.1)
+
+        return self._goto_preset_raw(token)
+
+    def start_patrol(self, preset_tokens: list[str], interval: int = 10, speed: float = 0.25):
         tokens = [str(t).strip() for t in (preset_tokens or []) if str(t).strip()]
         if not tokens:
             tokens = [p["token"] for p in self.get_presets() if p.get("token")]
@@ -359,7 +421,9 @@ class OnvifService:
         if self._patrol_stop:
             self._patrol_stop.set()
         sec = max(3, int(interval or 10))
+        spd = max(0.1, min(0.6, float(speed or 0.25)))
         self.patrol_interval = sec
+        self.patrol_speed = spd
         self._patrol_stop = threading.Event()
         self.cruise_mode = "patrol"
 
@@ -369,7 +433,7 @@ class OnvifService:
             while not stop.is_set():
                 token = tokens[idx % len(tokens)]
                 try:
-                    self._goto_preset_raw(token)
+                    self._smooth_goto_preset(token, speed=spd, stop_event=stop)
                 except Exception:
                     pass
                 if stop.wait(sec):

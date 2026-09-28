@@ -14,6 +14,7 @@ export function usePtzWs(cameraId: string | null) {
   const [led, setLed] = useState<'on' | 'off'>('off');
   const [cruiseMode, setCruiseMode] = useState<CruiseMode>(null);
   const [patrolInterval, setPatrolInterval] = useState<number>(10);
+  const [patrolSpeed, setPatrolSpeed] = useState<number>(0.25);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [lastOk, setLastOk] = useState<boolean | null>(null);
 
@@ -34,10 +35,13 @@ export function usePtzWs(cameraId: string | null) {
       if (cancelled) return;
       if (st.connected) setConnected(true);
       if (st.led === 'on' || st.led === 'off') setLed(st.led);
-      const s = st as { cruise_mode?: CruiseMode; patrol_interval?: number };
+      const s = st as { cruise_mode?: CruiseMode; patrol_interval?: number; patrol_speed?: number };
       if ('cruise_mode' in s) setCruiseMode(s.cruise_mode ?? null);
       if (typeof s.patrol_interval === 'number' && s.patrol_interval >= 3) {
         setPatrolInterval(s.patrol_interval);
+      }
+      if (typeof s.patrol_speed === 'number' && s.patrol_speed > 0) {
+        setPatrolSpeed(s.patrol_speed);
       }
     }).catch(() => {});
 
@@ -80,6 +84,9 @@ export function usePtzWs(cameraId: string | null) {
           if (typeof data.patrol_interval === 'number' && data.patrol_interval >= 3) {
             setPatrolInterval(data.patrol_interval);
           }
+          if (typeof data.patrol_speed === 'number' && data.patrol_speed > 0) {
+            setPatrolSpeed(data.patrol_speed);
+          }
           if (Array.isArray(data.presets)) setPresets(data.presets);
           if (typeof data.ok === 'boolean') setLastOk(data.ok);
         } catch {}
@@ -113,6 +120,7 @@ export function usePtzWs(cameraId: string | null) {
         success?: boolean;
         cruise_mode?: CruiseMode;
         patrol_interval?: number;
+        patrol_speed?: number;
         led?: 'on' | 'off';
         presets?: Preset[];
       };
@@ -121,6 +129,9 @@ export function usePtzWs(cameraId: string | null) {
       if (res && 'cruise_mode' in res) setCruiseMode(res.cruise_mode ?? null);
       if (res && typeof res.patrol_interval === 'number' && res.patrol_interval >= 3) {
         setPatrolInterval(res.patrol_interval);
+      }
+      if (res && typeof res.patrol_speed === 'number' && res.patrol_speed > 0) {
+        setPatrolSpeed(res.patrol_speed);
       }
       if (res && (res.led === 'on' || res.led === 'off')) setLed(res.led);
       if (res && Array.isArray(res.presets)) setPresets(res.presets);
@@ -170,12 +181,14 @@ export function usePtzWs(cameraId: string | null) {
     sendOrRest({ action: 'stop_cruise' });
   }, [sendOrRest]);
 
-  const patrol = useCallback((tokens: string[], interval?: number) => {
+  const patrol = useCallback((tokens: string[], interval?: number, speed?: number) => {
     const sec = Math.max(3, interval ?? patrolInterval);
+    const spd = Math.max(0.1, Math.min(0.8, speed ?? patrolSpeed));
     setPatrolInterval(sec);
+    setPatrolSpeed(spd);
     setCruiseMode('patrol');
-    sendOrRest({ action: 'patrol', preset_token: tokens.join(','), tokens, interval: sec });
-  }, [sendOrRest, patrolInterval]);
+    sendOrRest({ action: 'patrol', preset_token: tokens.join(','), tokens, interval: sec, speed: spd });
+  }, [sendOrRest, patrolInterval, patrolSpeed]);
 
   const stopPatrol = useCallback(() => {
     setCruiseMode(null);
@@ -203,7 +216,9 @@ export function usePtzWs(cameraId: string | null) {
   }, [sendOrRest]);
 
   return {
-    connected, error, led, cruiseMode, patrolInterval, setPatrolInterval,
+    connected, error, led, cruiseMode,
+    patrolInterval, setPatrolInterval,
+    patrolSpeed, setPatrolSpeed,
     presets, refreshPresets, lastOk,
     move, stop, home, gotoPreset, setPreset, removePreset,
     cruiseH, cruiseV, stopCruise, patrol, stopPatrol, patrolSweep, stopSweep, ledOn, ledOff,
