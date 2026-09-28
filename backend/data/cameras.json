@@ -89,7 +89,7 @@
       "user": "prueba",
       "password": "agar1212",
       "cloud_password": "",
-      "enabled": true,
+      "enabled": false,
       "model": "c500"
     },
     {
@@ -99,7 +99,7 @@
       "user": "c500n3",
       "password": "agar1212",
       "cloud_password": "",
-      "enabled": true,
+      "enabled": false,
       "model": "c500"
     }
   ],

@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-const TARGET_FPS = 15;
-const FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
-// Pacing buffer: hold up to this many decoded frames before drawing.
-// Absorbs WireGuard TCP-retransmission bursts without increasing perceived latency
-// beyond ~280 ms (4 × 67 ms) relative to the live edge.
-const PACE_SLOTS = 4;
-
 export function useMjpegWs(wsUrl: string | null) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -18,48 +11,56 @@ export function useMjpegWs(wsUrl: string | null) {
   const retryCountRef = useRef(0);
   const playingRef = useRef(false);
 
-  // Pacing ring-buffer: decoded ImageBitmaps waiting to be drawn.
-  const pacingRef = useRef<ImageBitmap[]>([]);
-  const pacingTimerRef = useRef<number | null>(null);
-  const lastDrawRef = useRef<number>(0);
+  const pendingBlobRef = useRef<Blob | null>(null);
+  const renderingRef = useRef(false);
+  const rafIdRef = useRef<number | null>(null);
 
-  const stopPacing = useCallback(() => {
-    if (pacingTimerRef.current !== null) {
-      clearInterval(pacingTimerRef.current);
-      pacingTimerRef.current = null;
+  const stopRender = useCallback(() => {
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
     }
-    for (const bm of pacingRef.current) bm.close();
-    pacingRef.current = [];
+    pendingBlobRef.current = null;
+    renderingRef.current = false;
   }, []);
 
-  const startPacing = useCallback((canvas: HTMLCanvasElement) => {
-    if (pacingTimerRef.current !== null) return;
+  const startRender = useCallback((canvas: HTMLCanvasElement) => {
+    if (rafIdRef.current !== null) return;
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    pacingTimerRef.current = window.setInterval(() => {
-      const buf = pacingRef.current;
-      if (buf.length === 0) return;
-      const now = performance.now();
-      if (now - lastDrawRef.current < FRAME_INTERVAL_MS - 2) return;
-      const bitmap = buf.shift()!;
-      if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
-      if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
-      ctx.drawImage(bitmap, 0, 0);
-      bitmap.close();
-      lastDrawRef.current = now;
-    }, Math.max(4, FRAME_INTERVAL_MS - 2));
+    const render = () => {
+      const blob = pendingBlobRef.current;
+      if (blob && !renderingRef.current) {
+        pendingBlobRef.current = null;
+        renderingRef.current = true;
+        createImageBitmap(blob)
+          .then((bitmap) => {
+            if (canvas.width !== bitmap.width) canvas.width = bitmap.width;
+            if (canvas.height !== bitmap.height) canvas.height = bitmap.height;
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            renderingRef.current = false;
+          })
+          .catch(() => {
+            renderingRef.current = false;
+          });
+      }
+      rafIdRef.current = requestAnimationFrame(render);
+    };
+
+    rafIdRef.current = requestAnimationFrame(render);
   }, []);
 
   const cleanup = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-    stopPacing();
+    stopRender();
     retryCountRef.current = 0;
     playingRef.current = false;
     setPlaying(false);
     setReconnecting(false);
-  }, [stopPacing]);
+  }, [stopRender]);
 
   useEffect(() => {
     if (!wsUrl) return;
@@ -77,7 +78,7 @@ export function useMjpegWs(wsUrl: string | null) {
 
       ws.onopen = () => { setError(false); retryCountRef.current = 0; };
 
-      ws.onmessage = async (e) => {
+      ws.onmessage = (e) => {
         if (!(e.data instanceof ArrayBuffer) || e.data.byteLength === 0) return;
 
         if (!playingRef.current) {
@@ -85,22 +86,10 @@ export function useMjpegWs(wsUrl: string | null) {
           setReconnecting(false);
           playingRef.current = true;
           const canvas = canvasRef.current;
-          if (canvas) startPacing(canvas);
+          if (canvas) startRender(canvas);
         }
 
-        try {
-          const bitmap = await createImageBitmap(
-            new Blob([e.data], { type: 'image/jpeg' }),
-          );
-          const buf = pacingRef.current;
-          buf.push(bitmap);
-          // Drop oldest frames when burst exceeds the pacing window.
-          while (buf.length > PACE_SLOTS) {
-            buf.shift()!.close();
-          }
-        } catch {
-          // Ignore malformed frames.
-        }
+        pendingBlobRef.current = new Blob([e.data], { type: 'image/jpeg' });
       };
 
       ws.onerror = () => { setError(true); };
@@ -109,7 +98,7 @@ export function useMjpegWs(wsUrl: string | null) {
         setPlaying(false);
         setReconnecting(true);
         playingRef.current = false;
-        stopPacing();
+        stopRender();
         if (urlRef.current === wsUrl) {
           const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000) + Math.random() * 1000;
           retryCountRef.current++;
@@ -120,7 +109,7 @@ export function useMjpegWs(wsUrl: string | null) {
 
     connect();
     return cleanup;
-  }, [wsUrl, cleanup, startPacing, stopPacing]);
+  }, [wsUrl, cleanup, startRender, stopRender]);
 
   return { canvasRef, playing, reconnecting, error };
 }
