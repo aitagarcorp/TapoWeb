@@ -23,6 +23,26 @@
       "stream_path": "stream2"
     },
     {
+      "id": "222f0785",
+      "name": "MPFM10601",
+      "ip": "10.10.20.51",
+      "user": "c500n1",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "C500"
+    },
+    {
+      "id": "43182196",
+      "name": "MPFM 1060 2",
+      "ip": "10.10.20.52",
+      "user": "c500n2",
+      "password": "agar1212",
+      "cloud_password": "",
+      "enabled": true,
+      "model": "c500"
+    },
+    {
       "id": "7c58b39d",
       "name": "c200 trailer1",
       "ip": "10.10.10.51",
@@ -63,26 +83,6 @@
       "model": "c200"
     },
     {
-      "id": "222f0785",
-      "name": "MPFM10601",
-      "ip": "10.10.20.51",
-      "user": "c500n1",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "C500"
-    },
-    {
-      "id": "43182196",
-      "name": "MPFM 1060 2",
-      "ip": "10.10.20.52",
-      "user": "c500n2",
-      "password": "agar1212",
-      "cloud_password": "",
-      "enabled": true,
-      "model": "c500"
-    },
-    {
       "id": "d0800298",
       "name": "PRUEBA",
       "ip": "192.168.2.135",
@@ -105,7 +105,7 @@
   ],
   "grid_size": 4,
   "theme": "dark",
-  "view_mode": "grid",
-  "main_camera": "748902bb",
+  "view_mode": "lmain",
+  "main_camera": "9932ee41",
   "recording_retention_days": 7
 }
