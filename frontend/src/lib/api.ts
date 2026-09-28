@@ -35,6 +35,12 @@ export interface Camera {
   motion_detection?: boolean;
 }
 
+export interface UserAccount {
+  username: string;
+  role: string;
+  allowed_camera_ids: string[];
+}
+
 export interface WatchdogStatus {
   camera_id: string;
   kind: string;
@@ -108,6 +114,11 @@ export const api = {
   getMe: () => request<{ username: string; role: string; allowed_camera_ids: string[] }>('/api/auth/me'),
   getTrailerCameras: () => request<{ allowed_camera_ids: string[] }>('/api/auth/trailer-cameras'),
   setTrailerCameras: (ids: string[]) => request<{ success: boolean; allowed_camera_ids: string[] }>('/api/auth/trailer-cameras', { method: 'PUT', body: JSON.stringify({ allowed_camera_ids: ids }) }),
+
+  getUsers: () => request<UserAccount[]>('/api/auth/users'),
+  addUser: (u: { username: string; password: string; role: string; allowed_camera_ids: string[] }) => request<{ user: UserAccount; users: UserAccount[] }>('/api/auth/users', { method: 'POST', body: JSON.stringify(u) }),
+  updateUser: (username: string, u: { username?: string; password?: string; role?: string; allowed_camera_ids?: string[] }) => request<{ user: UserAccount; users: UserAccount[] }>(`/api/auth/users/${encodeURIComponent(username)}`, { method: 'PUT', body: JSON.stringify(u) }),
+  deleteUser: (username: string) => request<{ users: UserAccount[] }>(`/api/auth/users/${encodeURIComponent(username)}`, { method: 'DELETE' }),
 
   getCameras: () => request<Camera[]>('/api/cameras'),
   addCamera: (cam: Partial<Camera>) => request<{ cameras: Camera[] }>('/api/cameras', { method: 'POST', body: JSON.stringify(cam) }),

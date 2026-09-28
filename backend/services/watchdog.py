@@ -206,14 +206,22 @@ class Watchdog:
             cam_dir = RECORDINGS_DIR / f"cam_{camera_id}"
             if (cam_dir / "_pause").exists():
                 continue
+
+            status = self._get_or_create(camera_id, "recording")
             if not self._recording_service.is_recording(camera_id):
-                # Always-on: start any enabled camera that is not recording.
+                if status.recovering:
+                    continue
+                if status.active:
+                    self._handle_failure(camera_id, "recording", cam, "recording process died", status)
+                    continue
+                # Initial start for any enabled camera that has not been started yet.
                 rtsp_url = build_rtsp_url(cam)
                 result = self._recording_service.start(camera_id, rtsp_url, cam.get("name", f"cam{camera_id}"))
+                status.active = True
+                status.last_check = time.time()
                 logger.info(f"Camera {camera_id} ({cam.get('name', '?')}) recording auto-started by watchdog: {result.get('success')}")
                 continue
 
-            status = self._get_or_create(camera_id, "recording")
             status.active = True
             status.last_check = time.time()
 
@@ -225,7 +233,7 @@ class Watchdog:
                 stuck = self._is_recording_stuck(camera_id)
                 if stuck:
                     self._handle_failure(camera_id, "recording", cam, "recording process stuck (no data written)", status)
-                    # Force restart: kill the stuck process so the next loop iteration starts a fresh one.
+                    # Force restart: kill the stuck process so the backoff retry starts a fresh one.
                     try:
                         proc.kill()
                         proc.wait(timeout=3)
@@ -272,12 +280,6 @@ class Watchdog:
         status.last_error = reason
         logger.warning(f"Camera {camera_id} ({cam.get('name', '?')}) [{kind}] failure #{status.consecutive_failures}: {reason}")
 
-        if status.consecutive_failures == 1:
-            rtsp_url = build_rtsp_url(cam)
-            status.black_detected = _detect_black_screen(rtsp_url)
-            if status.black_detected:
-                status.last_error = f"{reason} + black screen detected"
-
         key = (camera_id, kind)
         delay = self._backoff_delay(key)
         status.recovering = True
@@ -315,6 +317,7 @@ class Watchdog:
             result = self._recording_service.start(camera_id, rtsp_url, cam.get("name", f"cam{camera_id}"))
             status = self._get_or_create(camera_id, kind)
             status.last_check = time.time()
+            status.recovering = False
             if result.get("success"):
                 status.active = True
                 logger.info(f"Camera {camera_id} [{kind}] recording restarted")

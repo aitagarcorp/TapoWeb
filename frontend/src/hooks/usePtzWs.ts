@@ -1,5 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { getToken } from '../lib/auth';
+import { api } from '../lib/api';
+import type { Preset } from '../lib/api';
+
+export type CruiseMode = 'h' | 'v' | 'patrol' | 'sweep' | null;
 
 export function usePtzWs(cameraId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -8,12 +12,41 @@ export function usePtzWs(cameraId: string | null) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [led, setLed] = useState<'on' | 'off'>('off');
+  const [cruiseMode, setCruiseMode] = useState<CruiseMode>(null);
+  const [patrolInterval, setPatrolInterval] = useState<number>(10);
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [lastOk, setLastOk] = useState<boolean | null>(null);
+
+  const refreshPresets = useCallback(async () => {
+    if (!cameraId) return;
+    try {
+      const list = await api.getPresets(cameraId);
+      if (Array.isArray(list)) setPresets(list);
+    } catch {}
+  }, [cameraId]);
 
   useEffect(() => {
     if (cameraId === null) return;
+    let cancelled = false;
+    setPresets([]);
+
+    api.ptzStatus(cameraId).then((st) => {
+      if (cancelled) return;
+      if (st.connected) setConnected(true);
+      if (st.led === 'on' || st.led === 'off') setLed(st.led);
+      const s = st as { cruise_mode?: CruiseMode; patrol_interval?: number };
+      if ('cruise_mode' in s) setCruiseMode(s.cruise_mode ?? null);
+      if (typeof s.patrol_interval === 'number' && s.patrol_interval >= 3) {
+        setPatrolInterval(s.patrol_interval);
+      }
+    }).catch(() => {});
+
+    api.getPresets(cameraId).then((list) => {
+      if (!cancelled && Array.isArray(list)) setPresets(list);
+    }).catch(() => {});
 
     const connect = () => {
+      if (cancelled) return;
       if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       setError(null);
@@ -23,6 +56,7 @@ export function usePtzWs(cameraId: string | null) {
       wsRef.current = ws;
       ws.onopen = () => { retryCountRef.current = 0; };
       ws.onclose = () => {
+        if (cancelled) return;
         setConnected(false);
         setLastOk(null);
         const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000) + Math.random() * 500;
@@ -41,7 +75,12 @@ export function usePtzWs(cameraId: string | null) {
             setConnected(true);
             setError(null);
           }
-          if (data.led) setLed(data.led);
+          if (data.led === 'on' || data.led === 'off') setLed(data.led);
+          if ('cruise_mode' in data) setCruiseMode(data.cruise_mode ?? null);
+          if (typeof data.patrol_interval === 'number' && data.patrol_interval >= 3) {
+            setPatrolInterval(data.patrol_interval);
+          }
+          if (Array.isArray(data.presets)) setPresets(data.presets);
           if (typeof data.ok === 'boolean') setLastOk(data.ok);
         } catch {}
       };
@@ -50,6 +89,7 @@ export function usePtzWs(cameraId: string | null) {
 
     connect();
     return () => {
+      cancelled = true;
       if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
       if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       setConnected(false);
@@ -61,24 +101,111 @@ export function usePtzWs(cameraId: string | null) {
   const send = useCallback((cmd: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(cmd));
+      return true;
     }
+    return false;
   }, []);
 
-  const move = useCallback((pan: number, tilt: number) => send({ action: 'move', pan, tilt }), [send]);
-  const stop = useCallback(() => send({ action: 'stop' }), [send]);
-  const home = useCallback(() => send({ action: 'home' }), [send]);
-  const gotoPreset = useCallback((token: string) => send({ action: 'goto_preset', token }), [send]);
-  const setPreset = useCallback((name: string) => send({ action: 'set_preset', name }), [send]);
-  const removePreset = useCallback((token: string) => send({ action: 'remove_preset', token }), [send]);
-  const cruiseH = useCallback((speed?: number) => send({ action: 'cruise_h', speed: speed ?? 0.5 }), [send]);
-  const cruiseV = useCallback((speed?: number) => send({ action: 'cruise_v', speed: speed ?? 0.5 }), [send]);
-  const stopCruise = useCallback(() => send({ action: 'stop_cruise' }), [send]);
-  const patrol = useCallback((tokens: string[], interval?: number) => send({ action: 'patrol', tokens, interval: interval ?? 10 }), [send]);
-  const stopPatrol = useCallback(() => send({ action: 'stop_patrol' }), [send]);
-  const patrolSweep = useCallback((speed?: number) => send({ action: 'patrol_sweep', speed: speed ?? 0.5 }), [send]);
-  const stopSweep = useCallback(() => send({ action: 'stop_sweep' }), [send]);
-  const ledOn = useCallback(() => send({ action: 'led_on' }), [send]);
-  const ledOff = useCallback(() => send({ action: 'led_off' }), [send]);
+  const sendOrRest = useCallback(async (cmd: Record<string, unknown>) => {
+    if (!cameraId) return;
+    try {
+      const res = await api.ptzCommand(cameraId, cmd) as {
+        success?: boolean;
+        cruise_mode?: CruiseMode;
+        patrol_interval?: number;
+        led?: 'on' | 'off';
+        presets?: Preset[];
+      };
+      setConnected(true);
+      setError(null);
+      if (res && 'cruise_mode' in res) setCruiseMode(res.cruise_mode ?? null);
+      if (res && typeof res.patrol_interval === 'number' && res.patrol_interval >= 3) {
+        setPatrolInterval(res.patrol_interval);
+      }
+      if (res && (res.led === 'on' || res.led === 'off')) setLed(res.led);
+      if (res && Array.isArray(res.presets)) setPresets(res.presets);
+    } catch {
+      send(cmd);
+    }
+  }, [cameraId, send]);
 
-  return { connected, error, led, lastOk, move, stop, home, gotoPreset, setPreset, removePreset, cruiseH, cruiseV, stopCruise, patrol, stopPatrol, patrolSweep, stopSweep, ledOn, ledOff };
+  const move = useCallback((pan: number, tilt: number) => {
+    if (!send({ action: 'move', pan, tilt }) && cameraId) {
+      api.ptzCommand(cameraId, { action: 'move', pan, tilt }).catch(() => {});
+    }
+  }, [send, cameraId]);
+
+  const stop = useCallback(() => {
+    if (!send({ action: 'stop' }) && cameraId) {
+      api.ptzCommand(cameraId, { action: 'stop' }).catch(() => {});
+    }
+  }, [send, cameraId]);
+
+  const home = useCallback(() => { sendOrRest({ action: 'home' }); }, [sendOrRest]);
+  const gotoPreset = useCallback((token: string) => {
+    setCruiseMode(null);
+    sendOrRest({ action: 'goto_preset', preset_token: token, token });
+  }, [sendOrRest]);
+
+  const setPreset = useCallback(async (name: string) => {
+    await sendOrRest({ action: 'set_preset', preset_name: name, name });
+  }, [sendOrRest]);
+
+  const removePreset = useCallback(async (token: string) => {
+    await sendOrRest({ action: 'remove_preset', preset_token: token, token });
+  }, [sendOrRest]);
+
+  const cruiseH = useCallback((speed?: number) => {
+    setCruiseMode('h');
+    sendOrRest({ action: 'cruise_h', speed: speed ?? 0.5 });
+  }, [sendOrRest]);
+
+  const cruiseV = useCallback((speed?: number) => {
+    setCruiseMode('v');
+    sendOrRest({ action: 'cruise_v', speed: speed ?? 0.5 });
+  }, [sendOrRest]);
+
+  const stopCruise = useCallback(() => {
+    setCruiseMode(null);
+    sendOrRest({ action: 'stop_cruise' });
+  }, [sendOrRest]);
+
+  const patrol = useCallback((tokens: string[], interval?: number) => {
+    const sec = Math.max(3, interval ?? patrolInterval);
+    setPatrolInterval(sec);
+    setCruiseMode('patrol');
+    sendOrRest({ action: 'patrol', preset_token: tokens.join(','), tokens, interval: sec });
+  }, [sendOrRest, patrolInterval]);
+
+  const stopPatrol = useCallback(() => {
+    setCruiseMode(null);
+    sendOrRest({ action: 'stop_patrol' });
+  }, [sendOrRest]);
+
+  const patrolSweep = useCallback((speed?: number) => {
+    setCruiseMode('sweep');
+    sendOrRest({ action: 'patrol_sweep', speed: speed ?? 0.5 });
+  }, [sendOrRest]);
+
+  const stopSweep = useCallback(() => {
+    setCruiseMode(null);
+    sendOrRest({ action: 'stop_sweep' });
+  }, [sendOrRest]);
+
+  const ledOn = useCallback(() => {
+    setLed('on');
+    sendOrRest({ action: 'led_on' });
+  }, [sendOrRest]);
+
+  const ledOff = useCallback(() => {
+    setLed('off');
+    sendOrRest({ action: 'led_off' });
+  }, [sendOrRest]);
+
+  return {
+    connected, error, led, cruiseMode, patrolInterval, setPatrolInterval,
+    presets, refreshPresets, lastOk,
+    move, stop, home, gotoPreset, setPreset, removePreset,
+    cruiseH, cruiseV, stopCruise, patrol, stopPatrol, patrolSweep, stopSweep, ledOn, ledOff,
+  };
 }

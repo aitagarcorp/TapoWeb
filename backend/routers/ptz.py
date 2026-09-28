@@ -1,18 +1,10 @@
 from fastapi import APIRouter, HTTPException, Request
-from backend.config import load_settings, get_camera_by_id
+from backend.config import get_camera_by_id
 from backend.models import PTZCommand
-from backend.services.onvif_service import OnvifService
 from backend.auth import get_current_user_http
+from backend.ws.ptz_ws import _connections, _get_onvif
 
 router = APIRouter(prefix="/api/ptz", tags=["ptz"])
-
-_connections: dict[str, OnvifService] = {}
-
-
-def _get_onvif(camera_id: str) -> OnvifService:
-    if camera_id not in _connections:
-        _connections[camera_id] = OnvifService()
-    return _connections[camera_id]
 
 
 def _check_camera_access(camera_id: str, user: dict):
@@ -32,6 +24,8 @@ def connect_ptz(camera_id: str, request: Request):
     cam = _check_camera_access(camera_id, user)
     onvif = _get_onvif(camera_id)
     result = onvif.connect(cam["ip"], cam["user"], cam["password"])
+    result["cruise_mode"] = onvif.cruise_mode
+    result["led"] = "on" if onvif._light_on else "off"
     return result
 
 
@@ -49,16 +43,24 @@ def ptz_status(camera_id: str, request: Request):
     user = get_current_user_http(request)
     _check_camera_access(camera_id, user)
     onvif = _get_onvif(camera_id)
-    return {"connected": onvif.is_connected, "led": "on" if onvif._light_on else "off"}
+    return {
+        "connected": onvif.is_connected,
+        "led": "on" if onvif._light_on else "off",
+        "cruise_mode": onvif.cruise_mode,
+        "patrol_interval": onvif.patrol_interval,
+        "last_latency_ms": onvif.last_latency_ms,
+    }
 
 
 @router.post("/{camera_id}/command")
 def ptz_command(camera_id: str, cmd: PTZCommand, request: Request):
     user = get_current_user_http(request)
-    _check_camera_access(camera_id, user)
+    cam = _check_camera_access(camera_id, user)
     onvif = _get_onvif(camera_id)
     if not onvif.is_connected:
-        raise HTTPException(status_code=400, detail="PTZ not connected")
+        res = onvif.connect(cam["ip"], cam["user"], cam["password"])
+        if not res.get("success"):
+            raise HTTPException(status_code=400, detail=res.get("error", "PTZ not connected"))
 
     match cmd.action:
         case "move":
@@ -69,9 +71,10 @@ def ptz_command(camera_id: str, cmd: PTZCommand, request: Request):
             onvif.goto_preset(cmd.preset_token)
         case "set_preset":
             token = onvif.set_preset(cmd.preset_name)
-            return {"success": True, "token": token}
+            return {"success": True, "token": token, "presets": onvif.get_presets()}
         case "remove_preset":
             onvif.remove_preset(cmd.preset_token)
+            return {"success": True, "presets": onvif.get_presets()}
         case "home":
             onvif.goto_home()
         case "led_on":
@@ -89,17 +92,30 @@ def ptz_command(camera_id: str, cmd: PTZCommand, request: Request):
             onvif.start_patrol(tokens, cmd.interval)
         case "stop_patrol":
             onvif.stop_patrol()
+        case "patrol_sweep":
+            onvif.patrol_sweep(speed=cmd.speed)
+        case "stop_sweep":
+            onvif.stop_patrol()
+            onvif.stop_cruise()
         case _:
             raise HTTPException(status_code=400, detail=f"Unknown action: {cmd.action}")
 
-    return {"success": True}
+    return {
+        "success": True,
+        "cruise_mode": onvif.cruise_mode,
+        "patrol_interval": onvif.patrol_interval,
+        "led": "on" if onvif._light_on else "off",
+        "last_latency_ms": onvif.last_latency_ms,
+    }
 
 
 @router.get("/{camera_id}/presets")
 def get_presets(camera_id: str, request: Request):
     user = get_current_user_http(request)
-    _check_camera_access(camera_id, user)
+    cam = _check_camera_access(camera_id, user)
     onvif = _get_onvif(camera_id)
     if not onvif.is_connected:
-        raise HTTPException(status_code=400, detail="PTZ not connected")
+        res = onvif.connect(cam["ip"], cam["user"], cam["password"])
+        if not res.get("success"):
+            raise HTTPException(status_code=400, detail="PTZ not connected")
     return onvif.get_presets()

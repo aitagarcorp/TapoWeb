@@ -75,7 +75,7 @@ function CalendarView({ days, selectedDate, onSelect }: {
   const todayMonth = today.getMonth();
 
   return (
-    <div className="bg-surface border border-glass-border/60 rounded-sm p-3">
+    <div className="bg-surface border border-glass-border/60 rounded-sm p-3 h-full flex flex-col justify-between">
       <div className="flex items-center justify-between mb-2 gap-2">
         <button onClick={prevMonth} className="p-2.5 rounded-md bg-void border border-glass-border/70 text-text-secondary hover:text-accent hover:border-accent transition-colors">
           <ChevronLeft size={18} className="text-current" />
@@ -94,7 +94,7 @@ function CalendarView({ days, selectedDate, onSelect }: {
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-1 flex-1">
         {calendarCells.map((cell, i) => {
           if (!cell.date) return <div key={i} className="aspect-square" />;
           const day = daysByDate.get(cell.date);
@@ -130,7 +130,8 @@ function CalendarView({ days, selectedDate, onSelect }: {
   );
 }
 
-function HourTimeline({ hours, selectedHour, onSelect }: {
+function HourTimeline({ dateLabel, hours, selectedHour, onSelect }: {
+  dateLabel: string;
   hours: HourSegment[];
   selectedHour: number | null;
   onSelect: (hour: number) => void;
@@ -142,50 +143,70 @@ function HourTimeline({ hours, selectedHour, onSelect }: {
   const totalSize = hours.reduce((acc, h) => acc + h.size, 0);
 
   return (
-    <div className="bg-surface border border-glass-border/60 rounded-sm p-3">
-      <div className="flex items-center justify-between mb-2.5">
-        <h3 className="text-[11px] font-mono uppercase tracking-[0.18em] text-text-secondary">Timeline 24h</h3>
-        <span className="font-mono text-[10px] text-text-muted">
+    <div className="bg-surface border border-glass-border/60 rounded-sm p-3 h-full flex flex-col justify-between">
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Film size={14} className="text-accent shrink-0" />
+          <h3 className="text-xs font-semibold font-mono uppercase tracking-[0.14em] text-text-primary">
+            Horas (24h)
+          </h3>
+          <span className="text-xs font-mono text-text-muted truncate">
+            &middot; {dateLabel}
+          </span>
+        </div>
+        <span className="font-mono text-[11px] text-text-muted shrink-0">
           {hours.length} seg &middot; {formatSize(totalSize)}
         </span>
       </div>
 
-      <div className="flex items-end gap-[3px] h-14">
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 flex-1">
         {all24.map((h) => {
           const seg = byHour.get(h);
           const playable = seg?.playable !== false;
-          const clickable = seg && (playable || seg.in_progress);
+          const clickable = Boolean(seg && (playable || seg.in_progress));
           const isSelected = h === selectedHour;
+          const isInProgress = Boolean(seg?.in_progress);
           return (
             <button
               key={h}
+              type="button"
               onClick={() => clickable && onSelect(h)}
               disabled={!clickable}
               aria-label={`${pad(h)}:00`}
-              className={`flex-1 min-w-0 rounded-[1px] transition-colors ${clickable
-                ? isSelected
-                  ? 'bg-accent'
-                  : 'bg-recording/75 hover:bg-accent/80'
-                : 'bg-void border border-glass-border/40'}
-                ${seg?.in_progress && !isSelected ? 'animate-pulse' : ''}`}
-              style={{ height: clickable ? '100%' : '35%' }}
               title={seg ? (seg.in_progress
-                ? `${pad(h)}:00 - ${pad(h + 1)}:00 (grabando - ${formatSize(seg.size)})`
-                : `${pad(h)}:00 - ${pad(h + 1)}:00 (${formatSize(seg.size)})`)
+                ? `${pad(h)}:00 - ${pad((h + 1) % 24)}:00 (grabando - ${formatSize(seg.size)})`
+                : `${pad(h)}:00 - ${pad((h + 1) % 24)}:00 (${formatSize(seg.size)})`)
                 : `${pad(h)}:00 sin grabacion`}
-            />
+              className={`rounded-sm border p-2 flex flex-col items-center justify-center gap-1 font-mono transition-colors min-h-[58px] ${
+                isSelected
+                  ? 'bg-accent text-on-accent border-accent font-bold'
+                  : clickable && isInProgress
+                  ? 'bg-recording/10 border-recording/60 text-text-primary hover:border-accent cursor-pointer'
+                  : clickable
+                  ? 'bg-void border-glass-border/70 text-text-primary hover:border-accent hover:text-accent cursor-pointer'
+                  : 'bg-void/50 border-glass-border/30 text-text-muted opacity-40 cursor-not-allowed'
+              }`}
+            >
+              <span className="text-xs font-bold tracking-wider leading-none">
+                {pad(h)}:00
+              </span>
+              {seg ? (
+                isInProgress ? (
+                  <span className={`flex items-center gap-1 text-[10px] font-bold leading-none ${isSelected ? 'text-on-accent' : 'text-recording animate-pulse'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-on-accent' : 'bg-recording'}`} />
+                    REC
+                  </span>
+                ) : (
+                  <span className={`text-[10px] leading-none ${isSelected ? 'text-on-accent/90' : playable ? 'text-text-secondary' : 'text-warning'}`}>
+                    {playable ? formatSize(seg.size) : 'Incompleto'}
+                  </span>
+                )
+              ) : (
+                <span className="text-[10px] leading-none">&mdash;</span>
+              )}
+            </button>
           );
         })}
-      </div>
-
-      <div className="flex mt-1">
-        {[0, 3, 6, 9, 12, 15, 18, 21].map(h => (
-          <div key={h} className="flex-1 flex flex-col items-start">
-            <div className="h-1 w-px bg-glass-border/60" />
-            <span className="font-mono text-[9px] text-text-muted leading-none mt-0.5">{pad(h)}:00</span>
-          </div>
-        ))}
-        <div className="flex-1" />
       </div>
     </div>
   );
@@ -604,19 +625,18 @@ export function Dvr() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1">
-        <div className="lg:col-span-5 xl:col-span-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch shrink-0">
+        <div className="lg:col-span-5 xl:col-span-4 flex flex-col">
           <CalendarView days={calendar} selectedDate={selectedDate} onSelect={setSelectedDate} />
         </div>
-        <div className="lg:col-span-7 xl:col-span-8">
+        <div className="lg:col-span-7 xl:col-span-8 flex flex-col">
           {selectedDate ? (
-            <>
-              <div className="mb-2 text-sm text-text-muted">
-                <Film size={14} className="inline mr-1" />
-                {formatDateEs(selectedDate)}
-              </div>
-              <HourTimeline hours={hours} selectedHour={selectedHour} onSelect={setSelectedHour} />
-            </>
+            <HourTimeline
+              dateLabel={formatDateEs(selectedDate)}
+              hours={hours}
+              selectedHour={selectedHour}
+              onSelect={setSelectedHour}
+            />
           ) : (
             <div className="bg-surface border border-glass-border/60 rounded-sm p-4 h-full flex items-center justify-center text-text-muted text-sm">
               <span className="font-mono text-[11px] uppercase tracking-[0.18em]">Selecciona una fecha del calendario</span>
@@ -626,7 +646,7 @@ export function Dvr() {
       </div>
 
       {selectedSeg && segUrl && segDownloadUrl && (
-        <div className="mt-2">
+        <div className="mt-1 shrink-0">
           <VideoPlayer
             filename={selectedSeg.filename}
             title={segTitle}

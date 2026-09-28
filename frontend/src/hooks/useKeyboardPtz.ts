@@ -8,7 +8,7 @@ interface CamWs {
   ready: boolean;
 }
 
-export function useKeyboardPtz(cameraIds: string[], focusedCamera: string | null) {
+export function useKeyboardPtz(_cameraIds: string[], focusedCamera: string | null) {
   const connsRef = useRef<Map<string, CamWs>>(new Map());
   const focusedRef = useRef<string | null>(null);
   const heldRef = useRef<Set<string>>(new Set());
@@ -17,44 +17,48 @@ export function useKeyboardPtz(cameraIds: string[], focusedCamera: string | null
 
   focusedRef.current = focusedCamera;
 
-  const cameraIdsKey = cameraIds.join(',');
-
   useEffect(() => {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    setConnected(false);
+    if (!focusedCamera) return;
+
     const conns = connsRef.current;
-
-    for (const id of cameraIds) {
-      if (conns.has(id)) continue;
-      const ws = new WebSocket(`${protocol}//${location.host}/ws/ptz/${id}?token=${encodeURIComponent(getToken() || '')}`);
-      const entry: CamWs = { ws, ready: false };
-      conns.set(id, entry);
-
-      ws.onopen = () => { entry.ready = true; };
-      ws.onclose = () => { entry.ready = false; conns.delete(id); };
-      ws.onerror = () => { entry.ready = false; };
+    const existing = conns.get(focusedCamera);
+    if (existing?.ready && existing.ws.readyState === WebSocket.OPEN) {
+      setConnected(true);
+      return;
     }
 
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/ws/ptz/${focusedCamera}?token=${encodeURIComponent(getToken() || '')}`);
+    const entry: CamWs = { ws, ready: false };
+    conns.set(focusedCamera, entry);
+
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.connected) {
+          entry.ready = true;
+          if (focusedRef.current === focusedCamera) setConnected(true);
+        }
+      } catch {}
+    };
+    ws.onclose = () => {
+      entry.ready = false;
+      conns.delete(focusedCamera);
+      if (focusedRef.current === focusedCamera) setConnected(false);
+    };
+    ws.onerror = () => {
+      entry.ready = false;
+    };
+  }, [focusedCamera]);
+
+  useEffect(() => {
+    const conns = connsRef.current;
     return () => {
       conns.forEach(e => e.ws.close());
       conns.clear();
     };
-  }, [cameraIds, cameraIdsKey]);
-
-  useEffect(() => {
-    setConnected(false);
-    if (focusedCamera !== null) {
-      const entry = connsRef.current.get(focusedCamera);
-      if (entry?.ready) setConnected(true);
-      else {
-        const check = setInterval(() => {
-          const e = connsRef.current.get(focusedCamera);
-          if (e?.ready) { setConnected(true); clearInterval(check); }
-        }, 100);
-        const timeout = setTimeout(() => clearInterval(check), 5000);
-        return () => { clearInterval(check); clearTimeout(timeout); };
-      }
-    }
-  }, [focusedCamera]);
+  }, []);
 
   useEffect(() => {
     const held = heldRef.current;
@@ -71,12 +75,14 @@ export function useKeyboardPtz(cameraIds: string[], focusedCamera: string | null
       let pan = 0, tilt = 0;
       if (held.has('ArrowLeft'))  pan -= SPEED;
       if (held.has('ArrowRight')) pan += SPEED;
-      if (held.has('ArrowUp'))    tilt -= SPEED;
-      if (held.has('ArrowDown'))  tilt += SPEED;
+      if (held.has('ArrowUp'))    tilt += SPEED;
+      if (held.has('ArrowDown'))  tilt -= SPEED;
       return { pan, tilt };
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
         e.preventDefault();
         if (!held.has(e.key)) {

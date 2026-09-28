@@ -27,6 +27,9 @@ class RecordingService:
         self._cleanup_stop: threading.Event | None = None
         self._cleanup_thread: threading.Thread | None = None
         self._remux_lock = threading.Lock()
+        # Named-pipe paths for local zero-cost MJPEG extraction.
+        self._pipe_paths: dict[str, str] = {}
+        self._pipe_fds: dict[str, int] = {}
 
     def kill_orphans(self) -> int:
         """Kill all ffmpeg processes that are writing DVR segments.
@@ -292,8 +295,10 @@ class RecordingService:
         cmd = [
             ffmpeg, "-y",
             "-rtsp_transport", "tcp",
-            "-timeout", "15000000",
-            "-fflags", "+genpts",
+            "-timeout", "30000000",
+            "-fflags", "+genpts+discardcorrupt",
+            "-probesize", "500000",
+            "-analyzeduration", "1000000",
             "-i", rtsp_url,
             "-map", "0:v",
             "-map", "0:a?",
@@ -316,18 +321,27 @@ class RecordingService:
             "-c:v", "copy",
             "-c:a", "aac",
             "-f", "hls",
-            "-hls_time", "2",
-            "-hls_list_size", "3600",
+            "-hls_time", "4",
+            "-hls_list_size", "900",
             "-hls_flags", "delete_segments+append_list+omit_endlist",
             "-hls_segment_filename", hls_seg_pattern,
             hls_playlist,
+            "-map", "0:v",
+            "-an",
+            "-vf", "scale=640:-2,setpts=N",
+            "-c:v", "mjpeg",
+            "-q:v", "6",
+            "-fps_mode", "passthrough",
+            "-flush_packets", "1",
+            "-f", "image2pipe",
+            "pipe:1",
         ]
 
         try:
             proc = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env={**os.environ, "TZ": "America/Caracas"},
                 creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
@@ -339,6 +353,13 @@ class RecordingService:
                 name=f"dvr-stderr-{camera_id}",
             )
             t.start()
+            t_out = threading.Thread(
+                target=self._stdout_mjpeg_reader,
+                args=(camera_id, proc),
+                daemon=True,
+                name=f"dvr-mjpeg-{camera_id}",
+            )
+            t_out.start()
             self._processes[camera_id] = proc
             self._paths[camera_id] = seg_path
             self._start_cleanup_loop()
@@ -346,6 +367,43 @@ class RecordingService:
         except Exception as e:
             self._restore_backup(camera_id)
             return {"success": False, "error": str(e)}
+
+    def _stdout_mjpeg_reader(self, camera_id: str, proc: subprocess.Popen):
+        from backend.services.mjpeg_manager import mjpeg_manager
+        buf = b""
+        try:
+            stdout = proc.stdout
+            if stdout is None:
+                return
+            while True:
+                chunk = stdout.read(32768)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > 262144:
+                    last_soi = buf.rfind(b"\xff\xd8")
+                    if last_soi > 0:
+                        buf = buf[last_soi:]
+
+                latest_jpg: bytes | None = None
+                while True:
+                    soi = buf.find(b"\xff\xd8")
+                    if soi == -1:
+                        buf = b""
+                        break
+                    eoi = buf.find(b"\xff\xd9", soi + 2)
+                    if eoi == -1:
+                        buf = buf[soi:]
+                        break
+                    jpg = buf[soi:eoi + 2]
+                    buf = buf[eoi + 2:]
+                    if len(jpg) >= 256:
+                        latest_jpg = jpg
+
+                if latest_jpg is not None:
+                    mjpeg_manager.push_frame_threadsafe(camera_id, latest_jpg)
+        except Exception:
+            pass
 
     def _stderr_reader(self, camera_id: str, proc: subprocess.Popen):
         try:
@@ -453,6 +511,7 @@ class RecordingService:
         path = self._paths.pop(camera_id, None)
         self._names.pop(camera_id, None)
         self._last_backup.pop(camera_id, None)
+        pipe_path = self._pipe_paths.pop(camera_id, None)
         if proc is None:
             return {"success": False, "error": "not recording"}
         try:
@@ -484,6 +543,11 @@ class RecordingService:
             pl.unlink(missing_ok=True)
         except Exception:
             pass
+        if pipe_path:
+            try:
+                os.unlink(pipe_path)
+            except OSError:
+                pass
         return {"success": True, "file": path}
 
     def stop_all(self):
@@ -498,6 +562,16 @@ class RecordingService:
     def is_recording(self, camera_id: str) -> bool:
         proc = self._processes.get(camera_id)
         return proc is not None and proc.poll() is None
+
+    def get_mjpeg_pipe_path(self, camera_id: str) -> str | None:
+        """Return the named-pipe path for local MJPEG extraction, or None if
+        the DVR for this camera is not running or the pipe could not be created."""
+        if not self.is_recording(camera_id):
+            return None
+        path = self._pipe_paths.get(camera_id)
+        if path and os.path.exists(path):
+            return path
+        return None
 
     def list_recordings(self) -> list[dict]:
         recordings: list[dict] = []

@@ -180,7 +180,8 @@ export function Dashboard() {
   const lmainRef = useRef<HTMLDivElement>(null);
 
   const cameraIds = cameras.map(c => c.id);
-  const { connected: kbPtzConnected } = useKeyboardPtz(cameraIds, focusedCamera);
+  const activePtzTarget = ptzCamera ?? focusedCamera;
+  const { connected: kbPtzConnected } = useKeyboardPtz(cameraIds, activePtzTarget);
 
   const toggleSweep = useCallback(() => {
     if (!cameras.length) return;
@@ -355,25 +356,19 @@ export function Dashboard() {
           <div className="flex-1" />
 
           <span className="hidden lg:block font-mono text-[11px] text-text-muted truncate">
-            {focusedCamera !== null && cameras.find(c => c.id === focusedCamera)
-              ? `PTZ \u2192 ${cameras.find(c => c.id === focusedCamera)!.name}${kbPtzConnected ? ' \u2713' : ' ...'}`
+            {activePtzTarget !== null && cameras.find(c => c.id === activePtzTarget)
+              ? `PTZ \u2192 ${cameras.find(c => c.id === activePtzTarget)!.name}${kbPtzConnected ? ' \u2713' : ' ...'}`
               : 'Hover sobre una camara para PTZ por teclado'}
           </span>
         </div>
 
-        {/*
-          Both layouts stay mounted; the inactive one is hidden via CSS (display:none)
-          instead of being unmounted. This prevents the CameraTile WebSockets from
-          closing/reopening every time the user toggles grid <-> L+MAIN, which
-          otherwise makes every camera visibly "restart" (frames drop while the
-          WS re-handshakes). FFmpeg streams on the backend are shared, so having
-          two subscribers per camera costs nothing extra.
-        */}
+        {viewMode === 'grid' ? (
         <motion.div
+          key="grid"
           initial={false}
-          animate={{ opacity: viewMode === 'grid' ? 1 : 0 }}
-          transition={{ duration: 0.25, ease: 'easeOut' }}
-          className={viewMode === 'grid' ? 'h-full flex flex-col flex-1 min-h-0' : 'hidden'}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          className="h-full flex flex-col flex-1 min-h-0"
         >
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={cameraIds} strategy={rectSortingStrategy}>
@@ -406,11 +401,13 @@ export function Dashboard() {
             </SortableContext>
           </DndContext>
         </motion.div>
+        ) : (
         <motion.div
+          key="lmain"
           initial={false}
-          animate={{ opacity: viewMode === 'lmain' ? 1 : 0 }}
-          transition={{ duration: 0.25, ease: 'easeOut' }}
-          className={viewMode === 'lmain' ? 'h-full flex flex-col flex-1 min-h-0' : 'hidden'}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          className="h-full flex flex-col flex-1 min-h-0"
         >
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             {isMobile ? (
@@ -556,6 +553,7 @@ export function Dashboard() {
             )}
           </DndContext>
         </motion.div>
+        )}
       </div>
 
       {ptzCamera !== null && (

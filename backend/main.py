@@ -1,3 +1,4 @@
+import os
 import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -120,9 +121,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AGARCORP DE VENEZUELA C.A", version="1.0.0", lifespan=lifespan)
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+cors_origins = [
+    o.strip()
+    for o in os.environ.get("WEBTAPO_CORS_ORIGINS", "").split(",")
+    if o.strip()
+] or DEFAULT_CORS_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
